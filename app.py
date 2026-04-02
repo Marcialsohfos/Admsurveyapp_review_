@@ -11,9 +11,217 @@ import time
 from pathlib import Path
 import base64
 from io import BytesIO
+from datetime import datetime, timedelta
+import hashlib
+
 # Ajout après les imports existants
 from utils.file_handler import get_file_handler, display_file_stats, cleanup_session_files
 
+# ============================================
+# 🔐 CONFIGURATION DE SÉCURITÉ - CLÉ D'ACCÈS
+# ============================================
+
+# Clé de sécurité unique
+SECRET_KEY = "32015labmath@docadmnsurvey"
+
+# Configuration de l'authentification
+AUTH_CONFIG = {
+    'session_duration_hours': 8,      # Durée de session en heures
+    'max_login_attempts': 3,           # Tentatives max avant blocage
+    'block_duration_minutes': 15,      # Durée de blocage après trop de tentatives
+    'require_auth': True               # Activer/désactiver l'authentification
+}
+
+def hash_password(password: str) -> str:
+    """Hash le mot de passe pour la vérification"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def check_credentials(password: str) -> bool:
+    """Vérifie si le mot de passe est correct"""
+    return password == SECRET_KEY
+
+def init_auth_session():
+    """Initialise les variables de session pour l'authentification"""
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'login_attempts' not in st.session_state:
+        st.session_state.login_attempts = 0
+    if 'blocked_until' not in st.session_state:
+        st.session_state.blocked_until = None
+    if 'login_time' not in st.session_state:
+        st.session_state.login_time = None
+
+def is_blocked() -> bool:
+    """Vérifie si l'utilisateur est actuellement bloqué"""
+    if st.session_state.blocked_until:
+        if datetime.now() < st.session_state.blocked_until:
+            remaining = (st.session_state.blocked_until - datetime.now()).seconds // 60
+            st.error(f"🔒 Trop de tentatives. Réessayez dans {remaining} minutes.")
+            return True
+        else:
+            # Réinitialiser le blocage
+            st.session_state.blocked_until = None
+            st.session_state.login_attempts = 0
+    return False
+
+def login_page():
+    """Affiche la page de connexion"""
+    
+    # CSS pour la page de connexion
+    st.markdown("""
+    <style>
+    .login-container {
+        max-width: 450px;
+        margin: 0 auto;
+        padding: 2rem;
+        background: white;
+        border-radius: 15px;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        text-align: center;
+    }
+    .login-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 10px;
+        margin-bottom: 2rem;
+        text-align: center;
+    }
+    .login-header h1 {
+        color: white;
+        margin: 0;
+        font-size: 2rem;
+    }
+    .login-header p {
+        color: rgba(255,255,255,0.9);
+        margin-top: 0.5rem;
+    }
+    .security-badge {
+        background-color: #e8f5e9;
+        padding: 0.5rem;
+        border-radius: 5px;
+        margin-top: 1rem;
+        font-size: 0.8rem;
+        color: #2e7d32;
+    }
+    .key-info {
+        background-color: #fff3e0;
+        padding: 0.8rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+        font-size: 0.85rem;
+        color: #e65100;
+        border-left: 3px solid #ff9800;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # En-tête
+    st.markdown("""
+    <div class="login-header">
+        <h1>📄 DocAdminApp AI</h1>
+        <p>Extraction intelligente de données administratives</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Formulaire de connexion
+    with st.container():
+        st.markdown('<div class="login-container">', unsafe_allow_html=True)
+        
+        st.markdown("### 🔐 Accès sécurisé")
+        st.markdown("Veuillez entrer votre clé d'accès pour continuer")
+        
+        # Afficher le nombre de tentatives restantes
+        remaining_attempts = AUTH_CONFIG['max_login_attempts'] - st.session_state.login_attempts
+        if remaining_attempts > 0 and st.session_state.login_attempts > 0:
+            st.warning(f"⚠️ Tentatives restantes: {remaining_attempts}")
+        
+        # Information sur la clé
+        st.markdown("""
+        <div class="key-info">
+            🔑 Une clé d'accès vous a été fournie par l'administrateur.<br>
+            Contactez <strong>Lab_Math & Label CIE</strong> pour obtenir votre clé.
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Champ de mot de passe
+        password = st.text_input(
+            "Clé d'accès",
+            type="password",
+            placeholder="Entrez votre clé de sécurité",
+            key="login_password",
+            help="Contactez l'administrateur pour obtenir la clé d'accès"
+        )
+        
+        # Bouton de connexion
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("🔓 Se connecter", use_container_width=True):
+                if is_blocked():
+                    pass
+                elif not password:
+                    st.error("Veuillez entrer la clé d'accès")
+                elif check_credentials(password):
+                    st.session_state.authenticated = True
+                    st.session_state.login_time = datetime.now()
+                    st.session_state.login_attempts = 0
+                    st.success("✅ Connexion réussie ! Redirection...")
+                    st.rerun()
+                else:
+                    st.session_state.login_attempts += 1
+                    remaining = AUTH_CONFIG['max_login_attempts'] - st.session_state.login_attempts
+                    
+                    if st.session_state.login_attempts >= AUTH_CONFIG['max_login_attempts']:
+                        st.session_state.blocked_until = datetime.now() + timedelta(minutes=AUTH_CONFIG['block_duration_minutes'])
+                        st.error(f"🔒 Trop de tentatives. Compte bloqué pour {AUTH_CONFIG['block_duration_minutes']} minutes.")
+                    else:
+                        st.error(f"❌ Clé incorrecte. Plus que {remaining} tentative(s).")
+        
+        # Informations de sécurité
+        st.markdown("---")
+        st.markdown("""
+        <div class="security-badge">
+            🔒 Connexion sécurisée | Données chiffrées | Session limitée à 8h
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Footer
+    st.markdown("---")
+    st.markdown(
+        "<p style='text-align: center; color: gray; font-size: 0.8rem;'>DocAdminApp AI - Tous droits réservés © 2024 | Lab_Math & Label CIE</p>",
+        unsafe_allow_html=True
+    )
+
+def check_session_validity():
+    """Vérifie si la session est encore valide"""
+    if st.session_state.login_time:
+        session_age = datetime.now() - st.session_state.login_time
+        if session_age > timedelta(hours=AUTH_CONFIG['session_duration_hours']):
+            st.session_state.authenticated = False
+            st.session_state.login_time = None
+            st.warning("⏰ Session expirée. Veuillez vous reconnecter.")
+            st.rerun()
+
+def logout():
+    """Déconnecte l'utilisateur"""
+    st.session_state.authenticated = False
+    st.session_state.login_time = None
+    st.session_state.login_attempts = 0
+    st.session_state.blocked_until = None
+    st.success("🔓 Déconnecté avec succès")
+    st.rerun()
+
+# Initialiser l'authentification
+init_auth_session()
+
+# Vérifier la session si authentifié
+if st.session_state.authenticated:
+    check_session_validity()
+
+# ============================================
+# FIN DE LA CONFIGURATION DE SÉCURITÉ
+# ============================================
 
 # Configuration de la page
 st.set_page_config(
@@ -74,6 +282,12 @@ st.markdown("""
         transform: translateY(-2px);
         background: linear-gradient(135deg, #27ae60, #229954);
     }
+    .logout-btn {
+        background: linear-gradient(135deg, #e74c3c, #c0392b) !important;
+    }
+    .logout-btn:hover {
+        background: linear-gradient(135deg, #c0392b, #a93226) !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -99,7 +313,7 @@ def display_header():
     """Affiche l'en-tête de l'application"""
     st.markdown("""
     <div class="main-header">
-        <h1>📄 DocuMiner AI</h1>
+        <h1>📄 DocAdminApp AI</h1>
         <p>Extraction intelligente de données administratives - Power by Lab_Math & Label CIE</p>
     </div>
     """, unsafe_allow_html=True)
@@ -110,7 +324,7 @@ def display_sidebar():
     with st.sidebar:
         st.markdown("## 🎯 À propos")
         st.info(
-            "**DocuMiner AI** permet d'extraire automatiquement des données "
+            "**DocAdminApp AI** permet d'extraire automatiquement des données "
             "de documents scannés (PDF, images) et de les convertir en formats "
             "exploitables (Excel, CSV, Stata, SPSS, etc.)"
         )
@@ -139,7 +353,13 @@ def display_sidebar():
         """)
         
         st.markdown("---")
-        st.markdown("**Version:** 2.0 | **© Lab_Math & Label CIE**")
+        
+        # Informations de session
+        if st.session_state.login_time:
+            session_elapsed = datetime.now() - st.session_state.login_time
+            hours_left = max(0, AUTH_CONFIG['session_duration_hours'] - session_elapsed.total_seconds() / 3600)
+            st.caption(f"🕐 Session: {hours_left:.1f}h restantes")
+        
         # Ajouter les statistiques
         display_file_stats()
         
@@ -149,6 +369,11 @@ def display_sidebar():
             count = st.session_state.file_handler.clear_all_files()
             st.success(f"{count} fichiers supprimés")
             st.rerun()
+        
+        # Bouton de déconnexion
+        st.markdown("---")
+        if st.button("🚪 Se déconnecter", use_container_width=True, key="logout_btn"):
+            logout()
 
 # Configuration des paramètres
 def display_configuration():
@@ -378,7 +603,12 @@ def export_metadata_to_csv(data):
 
 # Main
 def main():
-    """Fonction principale"""
+    """Fonction principale avec authentification"""
+    
+    # Vérifier si l'authentification est requise et si l'utilisateur est connecté
+    if AUTH_CONFIG['require_auth'] and not st.session_state.authenticated:
+        login_page()
+        return
     
     # Initialisation
     init_session_state()
@@ -411,7 +641,7 @@ def main():
     # Footer
     st.markdown("---")
     st.markdown(
-        "<p style='text-align: center; color: gray;'>DocuMiner AI - Extraction intelligente de données administratives</p>",
+        "<p style='text-align: center; color: gray;'>DocAdminApp AI - Extraction intelligente de données administratives | 🔐 Accès sécurisé</p>",
         unsafe_allow_html=True
     )
 
